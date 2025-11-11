@@ -39,21 +39,24 @@ export const ParticleCanvas = () => {
     resize();
     window.addEventListener("resize", resize);
 
-    // Initialize particles
-    const particleCount = 80;
+    // Detect mobile for particle count
+    const isMobile = window.innerWidth <= 768;
+    const particleCount = isMobile ? 30 : 80;
     const centerX = canvas.width / 2;
     const centerY = canvas.height / 2;
 
+    // Initialize particles
+    particlesRef.current = [];
     for (let i = 0; i < particleCount; i++) {
       const angle = Math.random() * Math.PI * 2;
-      const speed = Math.random() * 120 + 10;
+      const speed = Math.random() * (isMobile ? 60 : 120) + (isMobile ? 5 : 10);
       particlesRef.current.push({
         x: Math.random() * canvas.width,
         y: Math.random() * canvas.height,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         color: COLORS[Math.floor(Math.random() * COLORS.length)],
-        size: Math.random() * 2.4 + 1.2,
+        size: Math.random() * (isMobile ? 1.5 : 2.4) + (isMobile ? 0.8 : 1.2),
         age: 0,
         life: Math.random() * 5 + 3,
         trail: [],
@@ -70,12 +73,12 @@ export const ParticleCanvas = () => {
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       particlesRef.current.forEach((p) => {
-        // Update physics
+        // Apply drag
         const drag = Math.pow(0.4, dt);
         p.vx *= drag;
         p.vy *= drag;
 
-        // Attraction to center (magnetic effect)
+        // Attraction to center
         const dx = centerX - p.x;
         const dy = centerY - p.y;
         const dist2 = dx * dx + dy * dy + 1e-6;
@@ -84,10 +87,10 @@ export const ParticleCanvas = () => {
         p.vy += dy * pull * dt;
 
         // Sinusoidal wander
-        p.vx += Math.sin(p.age * 3.1 + p.y * 0.01) * 6 * dt;
-        p.vy += Math.cos(p.age * 2.3 + p.x * 0.008) * 6 * dt;
+        p.vx += Math.sin(p.age * 3.1 + p.y * 0.01) * (isMobile ? 3 : 6) * dt;
+        p.vy += Math.cos(p.age * 2.3 + p.x * 0.008) * (isMobile ? 3 : 6) * dt;
 
-        // Integrate position
+        // Update position
         p.x += p.vx * dt;
         p.y += p.vy * dt;
         p.age += dt;
@@ -98,9 +101,10 @@ export const ParticleCanvas = () => {
 
         // Draw trail
         p.trail.forEach((pos, idx) => {
-          const alpha = (1 - idx / p.trail.length) * (1 - Math.min(1, p.age / p.life)) * 0.3;
-          const size = p.size * (1 - idx / p.trail.length) * 3;
-          
+          const alpha =
+            (1 - idx / p.trail.length) * (1 - Math.min(1, p.age / p.life)) * 0.3;
+          const size = p.size * (1 - idx / p.trail.length) * (isMobile ? 2 : 3);
+
           ctx.fillStyle = p.color.replace("0.8", String(alpha));
           ctx.beginPath();
           ctx.arc(pos.x, pos.y, size, 0, Math.PI * 2);
@@ -109,14 +113,14 @@ export const ParticleCanvas = () => {
 
         // Draw particle head
         const headAlpha = 1 - Math.min(1, p.age / p.life);
-        const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size * 3);
+        const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size * (isMobile ? 2 : 3));
         gradient.addColorStop(0, p.color.replace("0.8", String(headAlpha * 0.9)));
         gradient.addColorStop(0.5, p.color.replace("0.8", String(headAlpha * 0.5)));
         gradient.addColorStop(1, p.color.replace("0.8", "0"));
 
         ctx.fillStyle = gradient;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size * 3, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, p.size * (isMobile ? 2 : 3), 0, Math.PI * 2);
         ctx.fill();
 
         // Reset particle if out of bounds or too old
@@ -128,7 +132,7 @@ export const ParticleCanvas = () => {
           p.age > p.life
         ) {
           const angle = Math.random() * Math.PI * 2;
-          const speed = Math.random() * 120 + 10;
+          const speed = Math.random() * (isMobile ? 60 : 120) + (isMobile ? 5 : 10);
           p.x = Math.random() * canvas.width;
           p.y = Math.random() * canvas.height;
           p.vx = Math.cos(angle) * speed;
@@ -146,9 +150,7 @@ export const ParticleCanvas = () => {
 
     return () => {
       window.removeEventListener("resize", resize);
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     };
   }, []);
 
