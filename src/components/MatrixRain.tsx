@@ -15,22 +15,22 @@ export const MatrixRain = () => {
   const [streams, setStreams] = useState<Stream[]>([]);
 
   useEffect(() => {
-    // Create initial streams
-    const columnCount = Math.floor(window.innerWidth / 30);
+    // Calculate how many columns fit
+    const columnWidth = 30;
+    const columnCount = Math.floor(window.innerWidth / columnWidth);
+
     const initialStreams: Stream[] = [];
 
     for (let i = 0; i < columnCount; i++) {
       const color = Math.random() > 0.4 ? "text-neon-green" : "text-neon-blue";
-      const chars: string[] = [];
       const length = Math.floor(Math.random() * 12) + 6;
-      
-      for (let j = 0; j < length; j++) {
-        chars.push(CHARSET[Math.floor(Math.random() * CHARSET.length)]);
-      }
+      const chars = Array.from({ length }, () =>
+        CHARSET[Math.floor(Math.random() * CHARSET.length)]
+      );
 
       initialStreams.push({
         id: i,
-        left: (i * 30) + Math.random() * 20,
+        left: i * columnWidth + Math.random() * 20,
         duration: 3 + Math.random() * 6,
         delay: Math.random() * 5,
         color,
@@ -40,14 +40,15 @@ export const MatrixRain = () => {
 
     setStreams(initialStreams);
 
-    // Periodically update random characters for flicker effect
+    // Flicker effect: randomly update characters
     const flickerInterval = setInterval(() => {
       setStreams((prev) =>
         prev.map((stream) => {
           if (Math.random() > 0.7) {
             const newChars = [...stream.chars];
             const randomIndex = Math.floor(Math.random() * newChars.length);
-            newChars[randomIndex] = CHARSET[Math.floor(Math.random() * CHARSET.length)];
+            newChars[randomIndex] =
+              CHARSET[Math.floor(Math.random() * CHARSET.length)];
             return { ...stream, chars: newChars };
           }
           return stream;
