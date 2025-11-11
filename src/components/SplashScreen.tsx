@@ -43,11 +43,8 @@ export const SplashScreen = () => {
 
         {/* Logo text */}
         <div className="relative z-10">
-          <h1
-            className={`text-7xl md:text-8xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-neon-cyan via-neon-blue to-neon-purple neon-text animate-logo-rotate glitch-effect ${
-              glitchActive ? "active" : ""
-            }`}
-            data-text="Pro Builder"
+          {/* Glow layers behind */}
+          <div className="absolute inset-0 text-7xl md:text-8xl font-bold text-neon-cyan blur-md opacity-50 -z-10 animate-neon-pulse"
             style={{
               fontFamily: "'Inter', sans-serif",
               fontWeight: 900,
@@ -55,15 +52,35 @@ export const SplashScreen = () => {
             }}
           >
             Pro Builder
-          </h1>
+          </div>
+          <div className="absolute inset-0 text-7xl md:text-8xl font-bold text-neon-blue blur-lg opacity-30 -z-20 animate-logo-rotate"
+            style={{
+              fontFamily: "'Inter', sans-serif",
+              fontWeight: 900,
+              letterSpacing: "0.02em",
+            }}
+          >
+            Pro Builder
+          </div>
           
-          {/* Additional glow layers */}
-          <div className="absolute inset-0 text-7xl md:text-8xl font-bold text-neon-cyan blur-md opacity-50 -z-10 animate-neon-pulse">
+          {/* Crisp readable text on top */}
+          <h1
+            className={`text-7xl md:text-8xl font-bold text-white animate-logo-rotate glitch-effect ${
+              glitchActive ? "active" : ""
+            }`}
+            data-text="Pro Builder"
+            style={{
+              fontFamily: "'Inter', sans-serif",
+              fontWeight: 900,
+              letterSpacing: "0.02em",
+              textRendering: "optimizeLegibility",
+              WebkitFontSmoothing: "antialiased",
+              MozOsxFontSmoothing: "grayscale",
+              textShadow: "0 0 20px rgba(106, 220, 255, 0.6), 0 0 40px rgba(106, 220, 255, 0.4)",
+            }}
+          >
             Pro Builder
-          </div>
-          <div className="absolute inset-0 text-7xl md:text-8xl font-bold text-neon-blue blur-lg opacity-30 -z-20 animate-logo-rotate">
-            Pro Builder
-          </div>
+          </h1>
         </div>
       </div>
 
