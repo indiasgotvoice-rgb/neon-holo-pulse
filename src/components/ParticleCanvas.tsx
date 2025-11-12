@@ -9,14 +9,13 @@ interface Particle {
   size: number;
   age: number;
   life: number;
-  trail: { x: number; y: number }[];
 }
 
 const COLORS = [
-  "rgba(106, 220, 255, 0.8)", // cyan
-  "rgba(140, 80, 255, 0.8)",  // purple
-  "rgba(255, 100, 190, 0.8)", // magenta
-  "rgba(120, 255, 160, 0.8)", // green
+  "#6adcff", // cyan
+  "#8c50ff", // purple
+  "#ff64be", // magenta
+  "#78ffa0", // green
 ];
 
 export const ParticleCanvas = () => {
@@ -28,118 +27,95 @@ export const ParticleCanvas = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { 
+      alpha: true,
+      desynchronized: true, // Better performance on mobile
+    });
     if (!ctx) return;
 
     // Set canvas size
     const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2); // Cap at 2x for performance
+      canvas.width = window.innerWidth * dpr;
+      canvas.height = window.innerHeight * dpr;
+      canvas.style.width = window.innerWidth + 'px';
+      canvas.style.height = window.innerHeight + 'px';
+      ctx.scale(dpr, dpr);
     };
     resize();
     window.addEventListener("resize", resize);
 
-    // Detect mobile for particle count
+    // Detect mobile - REDUCED particle count
     const isMobile = window.innerWidth <= 768;
-    const particleCount = isMobile ? 30 : 80;
-    const centerX = canvas.width / 2;
-    const centerY = canvas.height / 2;
+    const particleCount = isMobile ? 15 : 40; // MUCH fewer particles
+    const centerX = window.innerWidth / 2;
+    const centerY = window.innerHeight / 2;
 
     // Initialize particles
     particlesRef.current = [];
     for (let i = 0; i < particleCount; i++) {
       const angle = Math.random() * Math.PI * 2;
-      const speed = Math.random() * (isMobile ? 60 : 120) + (isMobile ? 5 : 10);
+      const speed = Math.random() * 40 + 10;
       particlesRef.current.push({
-        x: Math.random() * canvas.width,
-        y: Math.random() * canvas.height,
+        x: Math.random() * window.innerWidth,
+        y: Math.random() * window.innerHeight,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         color: COLORS[Math.floor(Math.random() * COLORS.length)],
-        size: Math.random() * (isMobile ? 1.5 : 2.4) + (isMobile ? 0.8 : 1.2),
+        size: Math.random() * 1.5 + 1,
         age: 0,
-        life: Math.random() * 5 + 3,
-        trail: [],
+        life: Math.random() * 4 + 2,
       });
     }
 
     let lastTime = performance.now();
 
     const animate = (currentTime: number) => {
-      const dt = Math.min((currentTime - lastTime) / 1000, 0.1);
+      const dt = Math.min((currentTime - lastTime) / 1000, 0.05);
       lastTime = currentTime;
 
-      ctx.fillStyle = "rgba(6, 6, 12, 0.15)";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // Clear with semi-transparent black (fade trail effect)
+      ctx.fillStyle = "rgba(10, 14, 26, 0.2)";
+      ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
 
       particlesRef.current.forEach((p) => {
-        // Apply drag
-        const drag = Math.pow(0.4, dt);
+        // Simple physics
+        const drag = 0.98;
         p.vx *= drag;
         p.vy *= drag;
 
-        // Attraction to center
+        // Gentle attraction to center
         const dx = centerX - p.x;
         const dy = centerY - p.y;
-        const dist2 = dx * dx + dy * dy + 1e-6;
-        const pull = Math.min(2000 / dist2, 200);
-        p.vx += dx * pull * dt;
-        p.vy += dy * pull * dt;
-
-        // Sinusoidal wander
-        p.vx += Math.sin(p.age * 3.1 + p.y * 0.01) * (isMobile ? 3 : 6) * dt;
-        p.vy += Math.cos(p.age * 2.3 + p.x * 0.008) * (isMobile ? 3 : 6) * dt;
+        const dist = Math.sqrt(dx * dx + dy * dy) + 1;
+        const pull = 800 / dist;
+        p.vx += (dx / dist) * pull * dt;
+        p.vy += (dy / dist) * pull * dt;
 
         // Update position
         p.x += p.vx * dt;
         p.y += p.vy * dt;
         p.age += dt;
 
-        // Trail
-        p.trail.unshift({ x: p.x, y: p.y });
-        if (p.trail.length > 6) p.trail.pop();
-
-        // Draw trail
-        p.trail.forEach((pos, idx) => {
-          const alpha =
-            (1 - idx / p.trail.length) * (1 - Math.min(1, p.age / p.life)) * 0.3;
-          const size = p.size * (1 - idx / p.trail.length) * (isMobile ? 2 : 3);
-
-          ctx.fillStyle = p.color.replace("0.8", String(alpha));
-          ctx.beginPath();
-          ctx.arc(pos.x, pos.y, size, 0, Math.PI * 2);
-          ctx.fill();
-        });
-
-        // Draw particle head
-        const headAlpha = 1 - Math.min(1, p.age / p.life);
-        const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size * (isMobile ? 2 : 3));
-        gradient.addColorStop(0, p.color.replace("0.8", String(headAlpha * 0.9)));
-        gradient.addColorStop(0.5, p.color.replace("0.8", String(headAlpha * 0.5)));
-        gradient.addColorStop(1, p.color.replace("0.8", "0"));
-
-        ctx.fillStyle = gradient;
+        // Simple circle drawing (NO gradients for mobile performance)
+        const alpha = Math.max(0, 1 - p.age / p.life);
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = alpha * 0.6;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size * (isMobile ? 2 : 3), 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, p.size * 2, 0, Math.PI * 2);
         ctx.fill();
+        ctx.globalAlpha = 1;
 
-        // Reset particle if out of bounds or too old
-        if (
-          p.x < -20 ||
-          p.x > canvas.width + 20 ||
-          p.y < -20 ||
-          p.y > canvas.height + 20 ||
-          p.age > p.life
-        ) {
+        // Reset particle if dead or out of bounds
+        if (p.age > p.life || p.x < -50 || p.x > window.innerWidth + 50 || p.y < -50 || p.y > window.innerHeight + 50) {
           const angle = Math.random() * Math.PI * 2;
-          const speed = Math.random() * (isMobile ? 60 : 120) + (isMobile ? 5 : 10);
-          p.x = Math.random() * canvas.width;
-          p.y = Math.random() * canvas.height;
+          const speed = Math.random() * 40 + 10;
+          p.x = Math.random() * window.innerWidth;
+          p.y = Math.random() * window.innerHeight;
           p.vx = Math.cos(angle) * speed;
           p.vy = Math.sin(angle) * speed;
           p.age = 0;
-          p.life = Math.random() * 5 + 3;
-          p.trail = [];
+          p.life = Math.random() * 4 + 2;
         }
       });
 
@@ -158,7 +134,7 @@ export const ParticleCanvas = () => {
     <canvas
       ref={canvasRef}
       className="absolute inset-0 pointer-events-none"
-      style={{ mixBlendMode: "screen" }}
+      style={{ opacity: 0.7 }} // REMOVED mixBlendMode - this was killing Android
     />
   );
 };
