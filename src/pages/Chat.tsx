@@ -29,46 +29,35 @@ const Chat = () => {
     initializeConversation();
   }, [user, navigate]);
 
-  // Subscribe after conversation is loaded
+  // Subscribe after conversation is loaded - Using Broadcast (Free Tier)
   useEffect(() => {
     if (!conversation) return;
     
-    console.log('Setting up realtime subscription for conversation:', conversation.id);
+    console.log('🔴 Setting up realtime broadcast for conversation:', conversation.id);
     
     const channel = supabase
-      .channel(`conversation-${conversation.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages',
-          filter: `conversation_id=eq.${conversation.id}`,
-        },
-        (payload) => {
-          console.log('Realtime message received:', payload.new);
-          setMessages((prev) => [...prev, payload.new as Message]);
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'conversations',
-          filter: `id=eq.${conversation.id}`,
-        },
-        (payload) => {
-          console.log('Realtime conversation update:', payload.new);
-          setConversation(payload.new as Conversation);
-        }
-      )
+      .channel(`room-${conversation.id}`)
+      .on('broadcast', { event: 'new_message' }, (payload) => {
+        console.log('✅ Broadcast message received:', payload.payload);
+        const newMessage = payload.payload as Message;
+        setMessages((prev) => {
+          // Avoid duplicates
+          if (prev.some(m => m.id === newMessage.id)) {
+            return prev;
+          }
+          return [...prev, newMessage];
+        });
+      })
+      .on('broadcast', { event: 'conversation_update' }, (payload) => {
+        console.log('✅ Broadcast conversation update:', payload.payload);
+        setConversation(payload.payload as Conversation);
+      })
       .subscribe((status) => {
-        console.log('Subscription status:', status);
+        console.log('📡 Broadcast status:', status);
       });
 
     return () => {
-      console.log('Unsubscribing from channel');
+      console.log('🔴 Unsubscribing from broadcast');
       supabase.removeChannel(channel);
     };
   }, [conversation]);
@@ -79,6 +68,19 @@ const Chat = () => {
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const broadcastMessage = async (message: Message) => {
+    if (!conversation) return;
+    try {
+      await supabase.channel(`room-${conversation.id}`).send({
+        type: 'broadcast',
+        event: 'new_message',
+        payload: message,
+      });
+    } catch (error) {
+      console.error('Broadcast error:', error);
+    }
   };
 
   const initializeConversation = async () => {
@@ -128,36 +130,36 @@ const Chat = () => {
     await new Promise((resolve) => setTimeout(resolve, 3000));
     setIsTyping(false);
 
-    // Get welcome message from prompts
     const welcomePrompts = botPrompts.find(p => p.category === 'welcome');
     const welcomeMsg = welcomePrompts?.questions[0] || "Hey! I'm your app builder";
 
-    const { error: error1 } = await supabase.from('messages').insert([{
+    const { data, error: error1 } = await supabase.from('messages').insert([{
       conversation_id: conversationId,
       sender_type: 'bot',
       content: welcomeMsg,
-    }]);
+    }]).select();
     
     if (error1) {
       console.error('Error sending welcome message:', error1);
       return;
     }
+    if (data && data[0]) await broadcastMessage(data[0]);
 
     setIsTyping(true);
     await new Promise((resolve) => setTimeout(resolve, 5000));
     setIsTyping(false);
 
-    // Get start message from prompts
     const startPrompts = botPrompts.find(p => p.category === 'start');
     const startMsg = startPrompts?.questions[0] || "Please start describing your app";
 
-    const { error: error2 } = await supabase.from('messages').insert([{
+    const { data: data2, error: error2 } = await supabase.from('messages').insert([{
       conversation_id: conversationId,
       sender_type: 'bot',
       content: startMsg,
-    }]);
+    }]).select();
     
     if (error2) console.error('Error sending start message:', error2);
+    if (data2 && data2[0]) await broadcastMessage(data2[0]);
 
     setShowWelcome(false);
   };
@@ -192,15 +194,16 @@ const Chat = () => {
     setInputMessage('');
 
     try {
-      const { error: msgError } = await supabase.from('messages').insert([
+      const { data: insertedMsg, error: msgError } = await supabase.from('messages').insert([
         {
           conversation_id: conversation.id,
           sender_type: 'user',
           content: messageText,
         },
-      ]);
+      ]).select();
 
       if (msgError) throw msgError;
+      if (insertedMsg && insertedMsg[0]) await broadcastMessage(insertedMsg[0]);
 
       const analysis = analyzeMessage(messageText);
       console.log('Message analysis:', analysis);
@@ -220,47 +223,48 @@ const Chat = () => {
 
         if (updateError) throw updateError;
 
-        // Bot response logic with smart prompts
         if (analysis.shouldAskMore && newPercentage < 100) {
           setIsTyping(true);
           await new Promise((resolve) => setTimeout(resolve, 2000));
           setIsTyping(false);
 
-          // Get smart prompt based on context
           const smartPrompt = getSmartBotPrompt(messageText, newPercentage, messages);
 
           console.log('Sending smart bot prompt:', smartPrompt);
           
-          const { error } = await supabase.from('messages').insert([
+          const { data, error } = await supabase.from('messages').insert([
             {
               conversation_id: conversation.id,
               sender_type: 'bot',
               content: smartPrompt,
             },
-          ]);
+          ]).select();
           
           if (error) {
             console.error('Failed to insert bot message:', error);
+          } else if (data && data[0]) {
+            await broadcastMessage(data[0]);
           }
         } else if (newPercentage >= 100) {
           setIsTyping(true);
           await new Promise((resolve) => setTimeout(resolve, 2000));
           setIsTyping(false);
 
-          // Get completion message from prompts
           const completionPrompts = botPrompts.find(p => p.category === 'completion');
           const completionMsg = completionPrompts?.questions[0] || "Perfect! I have all the information I need. Click 'Build Now' to start building your app!";
           
-          const { error } = await supabase.from('messages').insert([
+          const { data, error } = await supabase.from('messages').insert([
             {
               conversation_id: conversation.id,
               sender_type: 'bot',
               content: completionMsg,
             },
-          ]);
+          ]).select();
           
           if (error) {
             console.error('Failed to insert completion message:', error);
+          } else if (data && data[0]) {
+            await broadcastMessage(data[0]);
           }
         }
       } else {
@@ -268,20 +272,21 @@ const Chat = () => {
         await new Promise((resolve) => setTimeout(resolve, 1500));
         setIsTyping(false);
 
-        // Get "need more details" message from prompts
         const needMorePrompts = botPrompts.find(p => p.category === 'need_more_details');
         const needMoreMsg = needMorePrompts?.questions[Math.floor(Math.random() * needMorePrompts.questions.length)] || "Please describe your app more deeply for better results.";
         
-        const { error } = await supabase.from('messages').insert([
+        const { data, error } = await supabase.from('messages').insert([
           {
             conversation_id: conversation.id,
             sender_type: 'bot',
             content: needMoreMsg,
           },
-        ]);
+        ]).select();
         
         if (error) {
           console.error('Failed to insert feedback message:', error);
+        } else if (data && data[0]) {
+          await broadcastMessage(data[0]);
         }
       }
     } catch (error) {
@@ -310,13 +315,15 @@ const Chat = () => {
 
       toast.success('Your app is now being built!');
 
-      await supabase.from('messages').insert([
+      const { data, error: msgError } = await supabase.from('messages').insert([
         {
           conversation_id: conversation.id,
           sender_type: 'bot',
           content: "Great! Your app is now being built. Our admin will start working on it and keep you updated!",
         },
-      ]);
+      ]).select();
+      
+      if (!msgError && data && data[0]) await broadcastMessage(data[0]);
     } catch (error) {
       console.error('Error starting build:', error);
       toast.error('Failed to start build');
