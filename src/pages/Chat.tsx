@@ -90,7 +90,10 @@ const Chat = () => {
       content: "Hey! I'm your app builder",
     };
 
-    const { error: error1 } = await supabase.from('messages').insert([welcomeMsg]);
+    console.log('Sending welcome message:', welcomeMsg);
+    const { data: welcomeData, error: error1 } = await supabase.from('messages').insert([welcomeMsg]).select();
+    console.log('Welcome message result:', { welcomeData, error: error1 });
+    
     if (error1) {
       console.error('Error sending welcome message:', error1);
       return;
@@ -106,7 +109,10 @@ const Chat = () => {
       content: 'Please start describing your app',
     };
 
-    const { error: error2 } = await supabase.from('messages').insert([instructionMsg]);
+    console.log('Sending instruction message:', instructionMsg);
+    const { data: instructionData, error: error2 } = await supabase.from('messages').insert([instructionMsg]).select();
+    console.log('Instruction message result:', { instructionData, error: error2 });
+    
     if (error2) console.error('Error sending instruction message:', error2);
 
     setShowWelcome(false);
@@ -115,6 +121,8 @@ const Chat = () => {
   const subscribeToMessages = () => {
     if (!user) return;
 
+    console.log('Setting up realtime subscription...');
+    
     const channel = supabase
       .channel('messages-channel')
       .on(
@@ -125,6 +133,7 @@ const Chat = () => {
           table: 'messages',
         },
         (payload) => {
+          console.log('Realtime message received:', payload.new);
           setMessages((prev) => [...prev, payload.new as Message]);
         }
       )
@@ -136,10 +145,13 @@ const Chat = () => {
           table: 'conversations',
         },
         (payload) => {
+          console.log('Realtime conversation update:', payload.new);
           setConversation(payload.new as Conversation);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('Subscription status:', status);
+      });
 
     return () => {
       supabase.removeChannel(channel);
@@ -185,6 +197,7 @@ const Chat = () => {
       if (msgError) throw msgError;
 
       const analysis = analyzeMessage(messageText);
+      console.log('Message analysis:', analysis);
 
       if (analysis.shouldUpdate) {
         const newPercentage = Math.min(conversation.completion_percentage + analysis.increment, 100);
@@ -201,6 +214,7 @@ const Chat = () => {
 
         if (updateError) throw updateError;
 
+        // Bot response logic
         if (analysis.shouldAskMore && newPercentage < 100) {
           setIsTyping(true);
           await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -216,38 +230,62 @@ const Chat = () => {
 
           const randomMsg = encouragementMessages[Math.floor(Math.random() * encouragementMessages.length)];
 
-          await supabase.from('messages').insert([
+          console.log('Inserting bot message:', randomMsg);
+          
+          const { data, error } = await supabase.from('messages').insert([
             {
               conversation_id: conversation.id,
               sender_type: 'bot',
               content: randomMsg,
             },
-          ]);
+          ]).select();
+
+          console.log('Bot message insert result:', { data, error });
+          
+          if (error) {
+            console.error('Failed to insert bot message:', error);
+          }
         } else if (newPercentage >= 100) {
           setIsTyping(true);
           await new Promise((resolve) => setTimeout(resolve, 2000));
           setIsTyping(false);
 
-          await supabase.from('messages').insert([
+          console.log('Inserting completion message');
+          
+          const { data, error } = await supabase.from('messages').insert([
             {
               conversation_id: conversation.id,
               sender_type: 'bot',
               content: "Perfect! I have all the information I need. Click 'Build Now' to start building your app!",
             },
-          ]);
+          ]).select();
+
+          console.log('Completion message insert result:', { data, error });
+          
+          if (error) {
+            console.error('Failed to insert completion message:', error);
+          }
         }
       } else {
         setIsTyping(true);
         await new Promise((resolve) => setTimeout(resolve, 1500));
         setIsTyping(false);
 
-        await supabase.from('messages').insert([
+        console.log('Inserting feedback message');
+        
+        const { data, error } = await supabase.from('messages').insert([
           {
             conversation_id: conversation.id,
             sender_type: 'bot',
             content: "Please describe your app more deeply for better results. Include details about features, design, and functionality.",
           },
-        ]);
+        ]).select();
+
+        console.log('Feedback message insert result:', { data, error });
+        
+        if (error) {
+          console.error('Failed to insert feedback message:', error);
+        }
       }
     } catch (error) {
       console.error('Error sending message:', error);
@@ -411,17 +449,27 @@ const Chat = () => {
           {conversation.status === 'building' && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-neon-green font-medium">Building Your App</span>
+                <span className="text-neon-purple font-medium">Build Progress</span>
                 <span className="text-white">{conversation.build_percentage}%</span>
               </div>
               <Progress value={conversation.build_percentage} className="h-2" />
-              <p className="text-xs text-center text-neon-green animate-pulse">
-                Our team is working on your app...
+              <p className="text-xs text-muted-foreground text-center">
+                Your app is being built. The admin will keep you updated!
               </p>
             </div>
           )}
 
-          {conversation.status !== 'building' && (
+          {conversation.status === 'completed' && (
+            <div className="text-center space-y-4 p-6 bg-neon-green/10 border border-neon-green/20 rounded-2xl">
+              <div className="text-4xl">🎉</div>
+              <h3 className="text-xl font-bold text-neon-green">Your App is Ready!</h3>
+              <p className="text-sm text-muted-foreground">
+                Check the messages above for your APK download link
+              </p>
+            </div>
+          )}
+
+          {conversation.status === 'describing' && (
             <div className="flex gap-2">
               <Textarea
                 value={inputMessage}
@@ -432,14 +480,14 @@ const Chat = () => {
                     sendMessage();
                   }
                 }}
-                placeholder="Describe your app..."
-                className="resize-none bg-background/60 border-neon-cyan/20 focus:border-neon-cyan text-white placeholder:text-muted-foreground"
-                rows={3}
+                placeholder="Describe your app in detail..."
+                className="flex-1 min-h-[60px] bg-background/60 border-neon-cyan/20 focus:border-neon-cyan text-white placeholder:text-muted-foreground resize-none"
+                disabled={isSending}
               />
               <Button
                 onClick={sendMessage}
-                disabled={!inputMessage.trim() || isSending}
-                className="h-auto bg-neon-cyan hover:bg-neon-cyan/80 text-background"
+                disabled={isSending || !inputMessage.trim()}
+                className="h-[60px] w-[60px] bg-gradient-to-r from-neon-cyan to-neon-blue hover:from-neon-cyan/80 hover:to-neon-blue/80 text-white"
               >
                 <Send className="w-5 h-5" />
               </Button>
