@@ -4,7 +4,7 @@ import { supabase, Message, Conversation } from '@/lib/supabase';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Progress } from '@/components/ui/progress';
-import { Send, FileDown, LogOut } from 'lucide-react';
+import { Send, FileDown, LogOut, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { botPrompts, getSmartBotPrompt } from '@/data/botPrompts';
@@ -18,6 +18,7 @@ const Chat = () => {
   const [isTyping, setIsTyping] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const channelRef = useRef<any>(null);
   const [showWelcome, setShowWelcome] = useState(true);
 
   useEffect(() => {
@@ -29,14 +30,19 @@ const Chat = () => {
     initializeConversation();
   }, [user, navigate]);
 
-  // Subscribe after conversation is loaded - Using Broadcast (Free Tier)
+  // Subscribe after conversation is loaded
   useEffect(() => {
     if (!conversation) return;
     
     console.log('🔴 Setting up realtime broadcast for conversation:', conversation.id);
     
-    const channel = supabase
-      .channel(`room-${conversation.id}`)
+    const channel = supabase.channel(`room-${conversation.id}`, {
+      config: {
+        broadcast: { self: true },
+      }
+    });
+    
+    channel
       .on('broadcast', { event: 'new_message' }, (payload) => {
         console.log('✅ Broadcast message received:', payload.payload);
         const newMessage = payload.payload as Message;
@@ -49,15 +55,22 @@ const Chat = () => {
         });
       })
       .on('broadcast', { event: 'conversation_update' }, (payload) => {
-        console.log('✅ Broadcast conversation update:', payload.payload);
+        console.log('✅ Conversation update received:', payload.payload);
         setConversation(payload.payload as Conversation);
       })
       .subscribe((status) => {
         console.log('📡 Broadcast status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Channel subscribed successfully');
+        }
       });
+    
+    // Store channel reference for broadcasting
+    channelRef.current = channel;
 
     return () => {
       console.log('🔴 Unsubscribing from broadcast');
+      channelRef.current = null;
       supabase.removeChannel(channel);
     };
   }, [conversation]);
@@ -71,15 +84,41 @@ const Chat = () => {
   };
 
   const broadcastMessage = async (message: Message) => {
-    if (!conversation) return;
+    if (!conversation || !channelRef.current) {
+      console.error('❌ Cannot broadcast - no channel or conversation');
+      return;
+    }
+    
     try {
-      await supabase.channel(`room-${conversation.id}`).send({
+      console.log('📤 Broadcasting message:', message.content?.substring(0, 50));
+      await channelRef.current.send({
         type: 'broadcast',
         event: 'new_message',
         payload: message,
       });
+      console.log('✅ Broadcast sent successfully');
     } catch (error) {
-      console.error('Broadcast error:', error);
+      console.error('❌ Broadcast error:', error);
+    }
+  };
+
+  const refreshMessages = async () => {
+    if (!conversation) return;
+    
+    console.log('🔄 Manually refreshing messages...');
+    const { data: msgs, error } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('conversation_id', conversation.id)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.error('Error refreshing:', error);
+      toast.error('Failed to refresh messages');
+    } else {
+      console.log('✅ Loaded messages:', msgs?.length);
+      setMessages(msgs || []);
+      toast.success('Messages refreshed');
     }
   };
 
@@ -131,7 +170,7 @@ const Chat = () => {
     setIsTyping(false);
 
     const welcomePrompts = botPrompts.find(p => p.category === 'welcome');
-    const welcomeMsg = welcomePrompts?.questions[0] || "Hey! I'm your app builder";
+    const welcomeMsg = welcomePrompts?.questions[0] || "Hey! I'm your app builder 👋";
 
     const { data, error: error1 } = await supabase.from('messages').insert([{
       conversation_id: conversationId,
@@ -361,14 +400,25 @@ const Chat = () => {
               <p className="text-xs text-neon-blue/80">ID: {user.unique_user_id}</p>
             </div>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={handleSignOut}
-            className="text-neon-cyan hover:bg-neon-cyan/10"
-          >
-            <LogOut className="w-5 h-5" />
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={refreshMessages}
+              className="text-neon-cyan hover:bg-neon-cyan/10"
+              title="Refresh messages"
+            >
+              <RefreshCw className="w-5 h-5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleSignOut}
+              className="text-neon-cyan hover:bg-neon-cyan/10"
+            >
+              <LogOut className="w-5 h-5" />
+            </Button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-6 space-y-4">
