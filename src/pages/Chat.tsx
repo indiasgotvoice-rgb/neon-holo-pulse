@@ -56,7 +56,7 @@ const Chat = () => {
   useEffect(() => {
     if (!conversation) return;
     console.log('🔄 Starting auto-refresh polling...');
-    
+
     pollingIntervalRef.current = setInterval(async () => {
       await refreshMessages(true);
     }, 2000);
@@ -79,7 +79,7 @@ const Chat = () => {
 
   const refreshMessages = async (silent = false) => {
     if (!conversation) return;
-    
+
     try {
       const { data: msgs, error } = await supabase
         .from('messages')
@@ -90,12 +90,12 @@ const Chat = () => {
       if (error) throw error;
 
       const newMessageCount = msgs?.length || 0;
-      
+
       if (newMessageCount !== lastMessageCountRef.current) {
         console.log('✅ New messages detected:', newMessageCount - lastMessageCountRef.current);
         setMessages(msgs || []);
         lastMessageCountRef.current = newMessageCount;
-        
+
         if (!silent) {
           toast.success('Messages refreshed');
         }
@@ -185,207 +185,104 @@ const Chat = () => {
     setShowWelcome(false);
   };
 
- const sendMessage = async () => {
-  if (!inputMessage.trim() || !conversation || isSending) return;
+  const sendMessage = async () => {
+    if (!inputMessage.trim() || !conversation || isSending) return;
 
-  setIsSending(true);
-  const messageText = inputMessage.trim();
-  setInputMessage('');
+    setIsSending(true);
+    const messageText = inputMessage.trim();
+    setInputMessage('');
 
-  try {
-    // Insert user message
-    await supabase.from('messages').insert([{
-      conversation_id: conversation.id,
-      sender_type: 'user',
-      content: messageText,
-    }]);
-
-    console.log('💬 User said:', messageText);
-
-    // 🧠 STEP 1: Validate message
-    const validation = validateMessage(messageText);
-    if (!validation.valid) {
-      setIsTyping(true);
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      setIsTyping(false);
-
+    try {
+      // Insert user message
       await supabase.from('messages').insert([{
         conversation_id: conversation.id,
-        sender_type: 'bot',
-        content: validation.reason,
+        sender_type: 'user',
+        content: messageText,
       }]);
 
-      setTimeout(() => refreshMessages(true), 500);
-      setIsSending(false);
-      return;
-    }
+      console.log('💬 User said:', messageText);
 
-    // 🧠 STEP 2: Analyze with FULL intelligence system
-    const analysis: IntelligentAnalysis = analyzeAndRespond(
-      messageText,
-      conversationContext,
-      conversationState,
-      messages
-    );
+      // 🧠 STEP 1: Validate message
+      const validation = validateMessage(messageText);
+      if (!validation.valid) {
+        setIsTyping(true);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        setIsTyping(false);
 
-    console.log('🎯 Full Analysis:', analysis);
+        await supabase.from('messages').insert([{
+          conversation_id: conversation.id,
+          sender_type: 'bot',
+          content: validation.reason,
+        }]);
 
-    // 🧠 STEP 3: Update context
-    setConversationContext(analysis.updatedContext);
-
-    // 🧠 STEP 4: Calculate progress
-    const newPercentage = Math.min(
-      conversation.completion_percentage + analysis.progressIncrement,
-      100
-    );
-
-    console.log(`📈 Progress: ${conversation.completion_percentage}% → ${newPercentage}%`);
-
-    // 🧠 STEP 5: Update database
-    await supabase
-      .from('conversations')
-      .update({
-        completion_percentage: newPercentage,
-        app_description: conversation.app_description + ' ' + messageText,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', conversation.id);
-
-    // 🧠 STEP 6: Send bot response
-    if (newPercentage < 100) {
-      setIsTyping(true);
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      setIsTyping(false);
-
-      await supabase.from('messages').insert([{
-        conversation_id: conversation.id,
-        sender_type: 'bot',
-        content: analysis.response.message,
-      }]);
-
-      // Update state
-      setConversationState(prev => ({
-        ...prev,
-        completionPercentage: newPercentage,
-        messageCount: prev.messageCount + 1,
-        questionsAsked: [...prev.questionsAsked, analysis.response.message]
-      }));
-
-    } else {
-      // 🎉 Completion
-      setIsTyping(true);
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      setIsTyping(false);
-
-      const completionMsg = generateCompletionMessage(analysis.updatedContext);
-
-      await supabase.from('messages').insert([{
-        conversation_id: conversation.id,
-        sender_type: 'bot',
-        content: completionMsg,
-      }]);
-    }
-
-    setTimeout(() => refreshMessages(true), 500);
-  } catch (error) {
-    console.error('Error sending message:', error);
-    toast.error('Failed to send message');
-  } finally {
-    setIsSending(false);
-  }
-};
-      // 🧠 STEP 2: Detect app type
-      const detectedAppType = detectAppTypeAdvanced(messageText);
-      if (detectedAppType && !conversationContext.appType) {
-        console.log('🎯 Detected app type:', detectedAppType);
-        setConversationContext(prev => ({ ...prev, appType: detectedAppType.type }));
+        setTimeout(() => refreshMessages(true), 500);
+        setIsSending(false);
+        return;
       }
 
-      // 🧠 STEP 3: Extract entities (features, platforms, etc.)
-      const entities = extractEntities(messageText);
-      console.log('📦 Extracted entities:', entities);
-
-      // 🧠 STEP 4: Analyze intent
-      const intent = analyzeIntent(messageText, conversationContext);
-      console.log('🎯 Intent Analysis:', intent);
-
-      // 🧠 STEP 5: Update context
-      const updatedContext = updateContext(conversationContext, messageText, intent);
-      setConversationContext(updatedContext);
-      console.log('📊 Updated Context:', updatedContext);
-
-      // 🧠 STEP 6: Score message
-      const messageScore = scoreMessage(messageText, intent, updatedContext, messages);
-      console.log('⭐ Message Score:', messageScore);
-
-      // 🧠 STEP 7: Update conversation state
-      const updatedState = updateConversationState(
+      // 🧠 STEP 2: Analyze with FULL intelligence system
+      const analysis: IntelligentAnalysis = analyzeAndRespond(
+        messageText,
+        conversationContext,
         conversationState,
-        messageScore,
-        updatedContext
+        messages
       );
-      setConversationState(updatedState);
-      console.log('🔄 Updated State:', updatedState);
 
-      // 🧠 STEP 8: Calculate new completion percentage
-      const contextCompleteness = calculateConversationCompleteness(updatedContext);
-      const newPercentage = Math.max(
-        conversation.completion_percentage + messageScore.progressIncrement,
-        contextCompleteness
+      console.log('🎯 Full Analysis:', analysis);
+
+      // 🧠 STEP 3: Update context
+      setConversationContext(analysis.updatedContext);
+
+      // 🧠 STEP 4: Calculate progress
+      const newPercentage = Math.min(
+        conversation.completion_percentage + analysis.progressIncrement,
+        100
       );
-      const finalPercentage = Math.min(newPercentage, 100);
 
-      console.log(`📈 Progress: ${conversation.completion_percentage}% → ${finalPercentage}%`);
-      console.log(`📊 Context Completeness: ${contextCompleteness}%`);
-      console.log(`➕ Progress Increment: +${messageScore.progressIncrement}%`);
+      console.log(`📈 Progress: ${conversation.completion_percentage}% → ${newPercentage}%`);
 
-      // Update database
+      // 🧠 STEP 5: Update database
       await supabase
         .from('conversations')
         .update({
-          completion_percentage: finalPercentage,
+          completion_percentage: newPercentage,
           app_description: conversation.app_description + ' ' + messageText,
           updated_at: new Date().toISOString(),
         })
         .eq('id', conversation.id);
 
-      // 🧠 STEP 9: Generate smart response
-      if (finalPercentage < 100) {
+      // 🧠 STEP 6: Send bot response
+      if (newPercentage < 100) {
         setIsTyping(true);
         await new Promise((resolve) => setTimeout(resolve, 2000));
         setIsTyping(false);
 
-        const smartQuestion = generateSmartQuestion(
-          messageText,
-          updatedContext,
-          updatedState,
-          conversationState.questionsAsked
-        );
-
-        console.log('🤖 Smart Question:', smartQuestion);
-
         await supabase.from('messages').insert([{
           conversation_id: conversation.id,
           sender_type: 'bot',
-          content: smartQuestion.question,
+          content: analysis.response.message,
         }]);
 
-        // Update state with asked question
+        // Update state
         setConversationState(prev => ({
           ...prev,
-          questionsAsked: [...prev.questionsAsked, smartQuestion.question]
+          completionPercentage: newPercentage,
+          messageCount: prev.messageCount + 1,
+          questionsAsked: [...prev.questionsAsked, analysis.response.message]
         }));
 
       } else {
-        // Completion reached
+        // 🎉 Completion
         setIsTyping(true);
         await new Promise((resolve) => setTimeout(resolve, 2000));
         setIsTyping(false);
 
+        const completionMsg = generateCompletionMessage(analysis.updatedContext);
+
         await supabase.from('messages').insert([{
           conversation_id: conversation.id,
           sender_type: 'bot',
-          content: "🎉 Perfect! I have everything I need. Your app description is complete! Click 'Build Now' to start building your dream app!",
+          content: completionMsg,
         }]);
       }
 
@@ -457,7 +354,7 @@ const Chat = () => {
             <div>
               <h1 className="text-lg font-bold text-white">Pro Builder AI</h1>
               <p className="text-xs text-neon-blue/80">
-                {conversationContext.appType 
+                {conversationContext.appType
                   ? `App Type: ${conversationContext.appType.replace('_', ' ')}`
                   : 'Discovering your app...'}
               </p>
