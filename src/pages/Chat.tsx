@@ -18,8 +18,9 @@ const Chat = () => {
   const [isTyping, setIsTyping] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const channelRef = useRef<any>(null);
   const [showWelcome, setShowWelcome] = useState(true);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const lastMessageCountRef = useRef<number>(0);
 
   useEffect(() => {
     if (!user) {
@@ -30,48 +31,22 @@ const Chat = () => {
     initializeConversation();
   }, [user, navigate]);
 
-  // Subscribe after conversation is loaded
+  // Auto-refresh polling (works on Android)
   useEffect(() => {
     if (!conversation) return;
+
+    console.log('🔄 Starting auto-refresh polling...');
     
-    console.log('🔴 Setting up realtime broadcast for conversation:', conversation.id);
-    
-    const channel = supabase.channel(`room-${conversation.id}`, {
-      config: {
-        broadcast: { self: true },
-      }
-    });
-    
-    channel
-      .on('broadcast', { event: 'new_message' }, (payload) => {
-        console.log('✅ Broadcast message received:', payload.payload);
-        const newMessage = payload.payload as Message;
-        setMessages((prev) => {
-          // Avoid duplicates
-          if (prev.some(m => m.id === newMessage.id)) {
-            return prev;
-          }
-          return [...prev, newMessage];
-        });
-      })
-      .on('broadcast', { event: 'conversation_update' }, (payload) => {
-        console.log('✅ Conversation update received:', payload.payload);
-        setConversation(payload.payload as Conversation);
-      })
-      .subscribe((status) => {
-        console.log('📡 Broadcast status:', status);
-        if (status === 'SUBSCRIBED') {
-          console.log('✅ Channel subscribed successfully');
-        }
-      });
-    
-    // Store channel reference for broadcasting
-    channelRef.current = channel;
+    // Poll every 2 seconds
+    pollingIntervalRef.current = setInterval(async () => {
+      await refreshMessages(true);
+    }, 2000);
 
     return () => {
-      console.log('🔴 Unsubscribing from broadcast');
-      channelRef.current = null;
-      supabase.removeChannel(channel);
+      console.log('🛑 Stopping auto-refresh polling');
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+      }
     };
   }, [conversation]);
 
@@ -83,42 +58,46 @@ const Chat = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const broadcastMessage = async (message: Message) => {
-    if (!conversation || !channelRef.current) {
-      console.error('❌ Cannot broadcast - no channel or conversation');
-      return;
-    }
-    
-    try {
-      console.log('📤 Broadcasting message:', message.content?.substring(0, 50));
-      await channelRef.current.send({
-        type: 'broadcast',
-        event: 'new_message',
-        payload: message,
-      });
-      console.log('✅ Broadcast sent successfully');
-    } catch (error) {
-      console.error('❌ Broadcast error:', error);
-    }
-  };
-
-  const refreshMessages = async () => {
+  const refreshMessages = async (silent = false) => {
     if (!conversation) return;
     
-    console.log('🔄 Manually refreshing messages...');
-    const { data: msgs, error } = await supabase
-      .from('messages')
-      .select('*')
-      .eq('conversation_id', conversation.id)
-      .order('created_at', { ascending: true });
+    try {
+      const { data: msgs, error } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('conversation_id', conversation.id)
+        .order('created_at', { ascending: true });
 
-    if (error) {
+      if (error) throw error;
+
+      const newMessageCount = msgs?.length || 0;
+      
+      // Only update if message count changed
+      if (newMessageCount !== lastMessageCountRef.current) {
+        console.log('✅ New messages detected:', newMessageCount - lastMessageCountRef.current);
+        setMessages(msgs || []);
+        lastMessageCountRef.current = newMessageCount;
+        
+        if (!silent) {
+          toast.success('Messages refreshed');
+        }
+      }
+
+      // Also refresh conversation data
+      const { data: conv, error: convError } = await supabase
+        .from('conversations')
+        .select('*')
+        .eq('id', conversation.id)
+        .single();
+
+      if (!convError && conv) {
+        setConversation(conv);
+      }
+    } catch (error) {
       console.error('Error refreshing:', error);
-      toast.error('Failed to refresh messages');
-    } else {
-      console.log('✅ Loaded messages:', msgs?.length);
-      setMessages(msgs || []);
-      toast.success('Messages refreshed');
+      if (!silent) {
+        toast.error('Failed to refresh messages');
+      }
     }
   };
 
@@ -154,6 +133,7 @@ const Chat = () => {
 
         if (msgsError) throw msgsError;
         setMessages(msgs || []);
+        lastMessageCountRef.current = msgs?.length || 0;
         setShowWelcome(false);
       }
 
@@ -169,60 +149,92 @@ const Chat = () => {
     await new Promise((resolve) => setTimeout(resolve, 3000));
     setIsTyping(false);
 
+    // GET WELCOME MESSAGE FROM PROMPTS FILE
     const welcomePrompts = botPrompts.find(p => p.category === 'welcome');
-    const welcomeMsg = welcomePrompts?.questions[0] || "Hey! I'm your app builder 👋";
+    const welcomeMsg = welcomePrompts?.questions[Math.floor(Math.random() * welcomePrompts.questions.length)] || "Hey! I'm your app builder 👋";
 
-    const { data, error: error1 } = await supabase.from('messages').insert([{
+    await supabase.from('messages').insert([{
       conversation_id: conversationId,
       sender_type: 'bot',
       content: welcomeMsg,
-    }]).select();
-    
-    if (error1) {
-      console.error('Error sending welcome message:', error1);
-      return;
-    }
-    if (data && data[0]) await broadcastMessage(data[0]);
+    }]);
 
     setIsTyping(true);
     await new Promise((resolve) => setTimeout(resolve, 5000));
     setIsTyping(false);
 
+    // GET START MESSAGE FROM PROMPTS FILE
     const startPrompts = botPrompts.find(p => p.category === 'start');
-    const startMsg = startPrompts?.questions[0] || "Please start describing your app";
+    const startMsg = startPrompts?.questions[Math.floor(Math.random() * startPrompts.questions.length)] || "Tell me about the app you want to build";
 
-    const { data: data2, error: error2 } = await supabase.from('messages').insert([{
+    await supabase.from('messages').insert([{
       conversation_id: conversationId,
       sender_type: 'bot',
       content: startMsg,
-    }]).select();
-    
-    if (error2) console.error('Error sending start message:', error2);
-    if (data2 && data2[0]) await broadcastMessage(data2[0]);
+    }]);
 
     setShowWelcome(false);
   };
 
-  const analyzeMessage = (message: string): { shouldUpdate: boolean; increment: number; shouldAskMore: boolean } => {
-    const wordCount = message.trim().split(/\s+/).length;
-    const hasDetails = /\b(app|application|feature|user|button|screen|page|data|color|design|login|payment|notification|upload|chat|profile|search|filter|dashboard)\b/i.test(message);
-    const hasNumbers = /\d/.test(message);
-    const hasPunctuation = /[.!?]/.test(message);
-    const hasSpecificDetails = /\b(will|should|can|need|want|must|allow|enable|include)\b/i.test(message);
+  const analyzeMessage = (message: string): { shouldUpdate: boolean; increment: number; shouldAskMore: boolean; isValid: boolean } => {
+    const trimmed = message.trim();
+    const wordCount = trimmed.split(/\s+/).length;
+    
+    // STRICT VALIDATION
+    // Too short (less than 3 words)
+    if (wordCount < 3) {
+      return { shouldUpdate: false, increment: 0, shouldAskMore: true, isValid: false };
+    }
+    
+    // Just numbers or gibberish
+    if (/^[0-9!@#$%^&*()_+=\-{}\[\]:;"'<>,.?\/\\|`~\s]+$/.test(trimmed)) {
+      return { shouldUpdate: false, increment: 0, shouldAskMore: true, isValid: false };
+    }
+    
+    // No vowels (keyboard mashing)
+    const hasVowels = /[aeiou]/i.test(trimmed);
+    if (!hasVowels && trimmed.length > 5) {
+      return { shouldUpdate: false, increment: 0, shouldAskMore: true, isValid: false };
+    }
+    
+    // Check for meaningful content
+    const hasMeaningfulWords = /\b(app|application|feature|user|button|screen|page|data|color|design|login|payment|notification|upload|chat|profile|search|filter|dashboard|want|need|should|can|will|game|social|shop|store|food|fitness|music|video|photo|learn|education|travel|dating|news|health|finance|work|business|money|sell|buy|create|make|build|help|show|display|manage|track|save|share|like|comment|post|message|follow|friend)\b/i.test(trimmed);
+    
+    if (!hasMeaningfulWords && wordCount < 5) {
+      return { shouldUpdate: false, increment: 0, shouldAskMore: true, isValid: false };
+    }
+    
+    // Check for single repeated word
+    const words = trimmed.toLowerCase().split(/\s+/);
+    if (words.length > 1 && words.every(w => w === words[0])) {
+      return { shouldUpdate: false, increment: 0, shouldAskMore: true, isValid: false };
+    }
+    
+    // SCORING SYSTEM (only if valid)
+    const hasDetails = /\b(app|application|feature|user|button|screen|page|data|color|design|login|payment|notification|upload|chat|profile|search|filter|dashboard)\b/i.test(trimmed);
+    const hasNumbers = /\d/.test(trimmed);
+    const hasPunctuation = /[.!?]/.test(trimmed);
+    const hasSpecificDetails = /\b(will|should|can|need|want|must|allow|enable|include|have|show|display|create|make|build)\b/i.test(trimmed);
+    const hasActionWords = /\b(create|make|build|develop|design|add|include|integrate|implement|allow|enable|support|provide|offer)\b/i.test(trimmed);
+    const hasDescriptiveWords = /\b(simple|complex|easy|difficult|fast|slow|beautiful|modern|clean|professional|user-friendly|interactive|responsive)\b/i.test(trimmed);
 
     let score = 0;
-    if (wordCount > 10) score += 3;
-    if (wordCount > 25) score += 3;
-    if (wordCount > 50) score += 4;
-    if (hasDetails) score += 3;
+    if (wordCount > 5) score += 2;
+    if (wordCount > 10) score += 4;
+    if (wordCount > 25) score += 4;
+    if (wordCount > 50) score += 5;
+    if (hasDetails) score += 4;
     if (hasNumbers) score += 1;
     if (hasPunctuation) score += 1;
-    if (hasSpecificDetails) score += 2;
+    if (hasSpecificDetails) score += 3;
+    if (hasMeaningfulWords) score += 3;
+    if (hasActionWords) score += 2;
+    if (hasDescriptiveWords) score += 2;
 
     const increment = Math.min(score, 15);
     const shouldAskMore = conversation!.completion_percentage + increment < 100;
 
-    return { shouldUpdate: increment > 0, increment, shouldAskMore };
+    return { shouldUpdate: increment > 0, increment, shouldAskMore, isValid: true };
   };
 
   const sendMessage = async () => {
@@ -233,25 +245,46 @@ const Chat = () => {
     setInputMessage('');
 
     try {
-      const { data: insertedMsg, error: msgError } = await supabase.from('messages').insert([
+      await supabase.from('messages').insert([
         {
           conversation_id: conversation.id,
           sender_type: 'user',
           content: messageText,
         },
-      ]).select();
-
-      if (msgError) throw msgError;
-      if (insertedMsg && insertedMsg[0]) await broadcastMessage(insertedMsg[0]);
+      ]);
 
       const analysis = analyzeMessage(messageText);
-      console.log('Message analysis:', analysis);
+      console.log('📊 Message analysis:', analysis);
+
+      // If message is invalid/gibberish
+      if (!analysis.isValid) {
+        setIsTyping(true);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        setIsTyping(false);
+
+        const clarificationPrompts = botPrompts.find(p => p.category === 'clarification_needed');
+        const clarificationMsg = clarificationPrompts?.questions[Math.floor(Math.random() * clarificationPrompts.questions.length)] || "Please describe your app idea clearly.";
+        
+        await supabase.from('messages').insert([
+          {
+            conversation_id: conversation.id,
+            sender_type: 'bot',
+            content: clarificationMsg,
+          },
+        ]);
+        
+        setTimeout(() => refreshMessages(true), 500);
+        setIsSending(false);
+        return; // STOP HERE - don't update progress
+      }
 
       if (analysis.shouldUpdate) {
         const newPercentage = Math.min(conversation.completion_percentage + analysis.increment, 100);
         const updatedDescription = conversation.app_description + ' ' + messageText;
 
-        const { error: updateError } = await supabase
+        console.log(`✅ Updating progress: ${conversation.completion_percentage}% → ${newPercentage}%`);
+
+        await supabase
           .from('conversations')
           .update({
             completion_percentage: newPercentage,
@@ -260,74 +293,60 @@ const Chat = () => {
           })
           .eq('id', conversation.id);
 
-        if (updateError) throw updateError;
-
         if (analysis.shouldAskMore && newPercentage < 100) {
           setIsTyping(true);
           await new Promise((resolve) => setTimeout(resolve, 2000));
           setIsTyping(false);
 
+          // USE SMART PROMPT FROM FILE - NOT HARDCODED
           const smartPrompt = getSmartBotPrompt(messageText, newPercentage, messages);
 
-          console.log('Sending smart bot prompt:', smartPrompt);
+          console.log('🤖 Sending smart bot prompt:', smartPrompt);
           
-          const { data, error } = await supabase.from('messages').insert([
+          await supabase.from('messages').insert([
             {
               conversation_id: conversation.id,
               sender_type: 'bot',
               content: smartPrompt,
             },
-          ]).select();
-          
-          if (error) {
-            console.error('Failed to insert bot message:', error);
-          } else if (data && data[0]) {
-            await broadcastMessage(data[0]);
-          }
+          ]);
         } else if (newPercentage >= 100) {
           setIsTyping(true);
           await new Promise((resolve) => setTimeout(resolve, 2000));
           setIsTyping(false);
 
+          // GET COMPLETION MESSAGE FROM PROMPTS FILE
           const completionPrompts = botPrompts.find(p => p.category === 'completion');
-          const completionMsg = completionPrompts?.questions[0] || "Perfect! I have all the information I need. Click 'Build Now' to start building your app!";
+          const completionMsg = completionPrompts?.questions[Math.floor(Math.random() * completionPrompts.questions.length)] || "Perfect! Click 'Build Now' to start!";
           
-          const { data, error } = await supabase.from('messages').insert([
+          await supabase.from('messages').insert([
             {
               conversation_id: conversation.id,
               sender_type: 'bot',
               content: completionMsg,
             },
-          ]).select();
-          
-          if (error) {
-            console.error('Failed to insert completion message:', error);
-          } else if (data && data[0]) {
-            await broadcastMessage(data[0]);
-          }
+          ]);
         }
       } else {
         setIsTyping(true);
         await new Promise((resolve) => setTimeout(resolve, 1500));
         setIsTyping(false);
 
+        // GET "NEED MORE DETAILS" MESSAGE FROM PROMPTS FILE
         const needMorePrompts = botPrompts.find(p => p.category === 'need_more_details');
-        const needMoreMsg = needMorePrompts?.questions[Math.floor(Math.random() * needMorePrompts.questions.length)] || "Please describe your app more deeply for better results.";
+        const needMoreMsg = needMorePrompts?.questions[Math.floor(Math.random() * needMorePrompts.questions.length)] || "Can you provide more details?";
         
-        const { data, error } = await supabase.from('messages').insert([
+        await supabase.from('messages').insert([
           {
             conversation_id: conversation.id,
             sender_type: 'bot',
             content: needMoreMsg,
           },
-        ]).select();
-        
-        if (error) {
-          console.error('Failed to insert feedback message:', error);
-        } else if (data && data[0]) {
-          await broadcastMessage(data[0]);
-        }
+        ]);
       }
+
+      // Force immediate refresh after sending
+      setTimeout(() => refreshMessages(true), 500);
     } catch (error) {
       console.error('Error sending message:', error);
       toast.error('Failed to send message');
@@ -340,7 +359,7 @@ const Chat = () => {
     if (!conversation || conversation.completion_percentage < 100) return;
 
     try {
-      const { error } = await supabase
+      await supabase
         .from('conversations')
         .update({
           status: 'building',
@@ -350,19 +369,17 @@ const Chat = () => {
         })
         .eq('id', conversation.id);
 
-      if (error) throw error;
-
       toast.success('Your app is now being built!');
 
-      const { data, error: msgError } = await supabase.from('messages').insert([
+      await supabase.from('messages').insert([
         {
           conversation_id: conversation.id,
           sender_type: 'bot',
           content: "Great! Your app is now being built. Our admin will start working on it and keep you updated!",
         },
-      ]).select();
-      
-      if (!msgError && data && data[0]) await broadcastMessage(data[0]);
+      ]);
+
+      setTimeout(() => refreshMessages(true), 500);
     } catch (error) {
       console.error('Error starting build:', error);
       toast.error('Failed to start build');
@@ -404,7 +421,7 @@ const Chat = () => {
             <Button
               variant="ghost"
               size="icon"
-              onClick={refreshMessages}
+              onClick={() => refreshMessages(false)}
               className="text-neon-cyan hover:bg-neon-cyan/10"
               title="Refresh messages"
             >
@@ -480,13 +497,13 @@ const Chat = () => {
           {conversation.status === 'describing' && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-neon-cyan font-medium">App Description</span>
-                <span className="text-white">{conversation.completion_percentage}%</span>
+                <span className="text-neon-cyan font-medium">App Description Progress</span>
+                <span className="text-white font-bold">{conversation.completion_percentage}%</span>
               </div>
               <Progress value={conversation.completion_percentage} className="h-2" />
               {conversation.completion_percentage < 100 && (
                 <p className="text-xs text-muted-foreground text-center animate-pulse">
-                  Please describe your app more deeply for better results
+                  Keep describing your app with more details to reach 100%
                 </p>
               )}
               {conversation.completion_percentage >= 100 && (
@@ -494,7 +511,7 @@ const Chat = () => {
                   onClick={handleBuildNow}
                   className="w-full h-12 bg-gradient-to-r from-neon-cyan to-neon-blue hover:from-neon-cyan/80 hover:to-neon-blue/80 text-white font-bold text-lg shadow-lg shadow-neon-cyan/50 animate-pulse"
                 >
-                  Build Now
+                  🚀 Build Now
                 </Button>
               )}
             </div>
@@ -504,11 +521,11 @@ const Chat = () => {
             <div className="space-y-2">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-neon-purple font-medium">Build Progress</span>
-                <span className="text-white">{conversation.build_percentage}%</span>
+                <span className="text-white font-bold">{conversation.build_percentage}%</span>
               </div>
               <Progress value={conversation.build_percentage} className="h-2" />
               <p className="text-xs text-muted-foreground text-center">
-                Your app is being built. The admin will keep you updated!
+                🔨 Your app is being built. The admin will keep you updated!
               </p>
             </div>
           )}
@@ -541,7 +558,7 @@ const Chat = () => {
               <Button
                 onClick={sendMessage}
                 disabled={isSending || !inputMessage.trim()}
-                className="h-[60px] w-[60px] bg-gradient-to-r from-neon-cyan to-neon-blue hover:from-neon-cyan/80 hover:to-neon-blue/80 text-white"
+                className="h-[60px] w-[60px] bg-gradient-to-r from-neon-cyan to-neon-blue hover:from-neon-cyan/80 hover:to-neon-blue/80 text-white disabled:opacity-50"
               >
                 <Send className="w-5 h-5" />
               </Button>
