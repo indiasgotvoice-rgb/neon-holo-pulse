@@ -8,26 +8,16 @@ import { Send, FileDown, LogOut, RefreshCw, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 
-// 🧠 IMPORT ALL INTELLIGENCE SYSTEMS
-import { detectAppTypeAdvanced } from '@/data/appTypes';
+// 🧠 NEW INTELLIGENCE ENGINE - Single import for everything
 import { 
-  analyzeIntent, 
-  extractEntities, 
-  updateContext, 
-  ConversationContext,
-  calculateConversationCompleteness 
-} from '@/data/contextUnderstanding';
-import { scoreMessage, isValidMessage } from '@/data/scoringSystem';
-import {
-  determineConversationStage,
-  updateConversationState,
-  initializeConversationState,
-  ConversationState,
-  isOffTopic,
-  getRedirectionMessage,
-  getStageGuidance
-} from '@/data/conversationFlow';
-import { generateSmartQuestion } from '@/data/questionGenerator';
+  analyzeAndRespond, 
+  validateMessage, 
+  generateCompletionMessage,
+  IntelligentAnalysis 
+} from '@/data/intelligenceEngine';
+import { ConversationContext } from '@/data/contextUnderstanding';
+import { ConversationState } from '@/data/conversationFlow';
+import { initializeConversationState } from '@/data/conversationFlow';
 
 const Chat = () => {
   const { user, signOut } = useAuth();
@@ -195,41 +185,115 @@ const Chat = () => {
     setShowWelcome(false);
   };
 
-  const sendMessage = async () => {
-    if (!inputMessage.trim() || !conversation || isSending) return;
+ const sendMessage = async () => {
+  if (!inputMessage.trim() || !conversation || isSending) return;
 
-    setIsSending(true);
-    const messageText = inputMessage.trim();
-    setInputMessage('');
+  setIsSending(true);
+  const messageText = inputMessage.trim();
+  setInputMessage('');
 
-    try {
-      // Insert user message
+  try {
+    // Insert user message
+    await supabase.from('messages').insert([{
+      conversation_id: conversation.id,
+      sender_type: 'user',
+      content: messageText,
+    }]);
+
+    console.log('💬 User said:', messageText);
+
+    // 🧠 STEP 1: Validate message
+    const validation = validateMessage(messageText);
+    if (!validation.valid) {
+      setIsTyping(true);
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      setIsTyping(false);
+
       await supabase.from('messages').insert([{
         conversation_id: conversation.id,
-        sender_type: 'user',
-        content: messageText,
+        sender_type: 'bot',
+        content: validation.reason,
       }]);
 
-      console.log('💬 User said:', messageText);
+      setTimeout(() => refreshMessages(true), 500);
+      setIsSending(false);
+      return;
+    }
 
-      // 🧠 STEP 1: Validate message
-      const validation = isValidMessage(messageText);
-      if (!validation.valid) {
-        setIsTyping(true);
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-        setIsTyping(false);
+    // 🧠 STEP 2: Analyze with FULL intelligence system
+    const analysis: IntelligentAnalysis = analyzeAndRespond(
+      messageText,
+      conversationContext,
+      conversationState,
+      messages
+    );
 
-        await supabase.from('messages').insert([{
-          conversation_id: conversation.id,
-          sender_type: 'bot',
-          content: validation.reason || "Please provide a meaningful description of your app.",
-        }]);
+    console.log('🎯 Full Analysis:', analysis);
 
-        setTimeout(() => refreshMessages(true), 500);
-        setIsSending(false);
-        return;
-      }
+    // 🧠 STEP 3: Update context
+    setConversationContext(analysis.updatedContext);
 
+    // 🧠 STEP 4: Calculate progress
+    const newPercentage = Math.min(
+      conversation.completion_percentage + analysis.progressIncrement,
+      100
+    );
+
+    console.log(`📈 Progress: ${conversation.completion_percentage}% → ${newPercentage}%`);
+
+    // 🧠 STEP 5: Update database
+    await supabase
+      .from('conversations')
+      .update({
+        completion_percentage: newPercentage,
+        app_description: conversation.app_description + ' ' + messageText,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', conversation.id);
+
+    // 🧠 STEP 6: Send bot response
+    if (newPercentage < 100) {
+      setIsTyping(true);
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      setIsTyping(false);
+
+      await supabase.from('messages').insert([{
+        conversation_id: conversation.id,
+        sender_type: 'bot',
+        content: analysis.response.message,
+      }]);
+
+      // Update state
+      setConversationState(prev => ({
+        ...prev,
+        completionPercentage: newPercentage,
+        messageCount: prev.messageCount + 1,
+        questionsAsked: [...prev.questionsAsked, analysis.response.message]
+      }));
+
+    } else {
+      // 🎉 Completion
+      setIsTyping(true);
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      setIsTyping(false);
+
+      const completionMsg = generateCompletionMessage(analysis.updatedContext);
+
+      await supabase.from('messages').insert([{
+        conversation_id: conversation.id,
+        sender_type: 'bot',
+        content: completionMsg,
+      }]);
+    }
+
+    setTimeout(() => refreshMessages(true), 500);
+  } catch (error) {
+    console.error('Error sending message:', error);
+    toast.error('Failed to send message');
+  } finally {
+    setIsSending(false);
+  }
+};
       // 🧠 STEP 2: Detect app type
       const detectedAppType = detectAppTypeAdvanced(messageText);
       if (detectedAppType && !conversationContext.appType) {
