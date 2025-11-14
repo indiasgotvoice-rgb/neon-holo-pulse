@@ -384,3 +384,22 @@ export const extractMentionedFeatures = (message: string, appType: string): stri
   
   return mentioned;
 };
+
+// Add this at the end of appTypes.ts file (before the last closing bracket)
+
+// Extract features mentioned in message that match app type's common features
+export const extractMentionedFeatures = (message: string, appType: string): string[] => {
+  const appDef = appTypeDatabase.find(def => def.type === appType);
+  if (!appDef) return [];
+  
+  const mentioned: string[] = [];
+  const lowerMsg = message.toLowerCase();
+  
+  for (const feature of appDef.commonFeatures) {
+    if (lowerMsg.includes(feature.toLowerCase())) {
+      mentioned.push(feature);
+    }
+  }
+  
+  return mentioned;
+};
