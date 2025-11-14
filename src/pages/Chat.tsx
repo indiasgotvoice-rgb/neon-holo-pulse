@@ -8,8 +8,8 @@ import { Send, FileDown, LogOut, RefreshCw, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 
-// Import all intelligence systems
-import { detectAppTypeAdvanced, extractMentionedFeatures } from '@/data/appTypes';
+// 🧠 IMPORT ALL INTELLIGENCE SYSTEMS
+import { detectAppTypeAdvanced } from '@/data/appTypes';
 import { 
   analyzeIntent, 
   extractEntities, 
@@ -42,7 +42,7 @@ const Chat = () => {
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastMessageCountRef = useRef<number>(0);
 
-  // Intelligence system state
+  // 🧠 INTELLIGENCE STATE
   const [conversationContext, setConversationContext] = useState<ConversationContext>({
     mentionedFeatures: [],
     mentionedDesignPrefs: [],
@@ -183,13 +183,13 @@ const Chat = () => {
     }]);
 
     setIsTyping(true);
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await new Promise((resolve) => setTimeout(resolve, 4000));
     setIsTyping(false);
 
     await supabase.from('messages').insert([{
       conversation_id: conversationId,
       sender_type: 'bot',
-      content: "Tell me about the app you want to build. What's the main idea?",
+      content: "Tell me about the app you want to build. What type of app is it? (For example: shopping, social media, fitness, productivity, etc.)",
     }]);
 
     setShowWelcome(false);
@@ -210,6 +210,8 @@ const Chat = () => {
         content: messageText,
       }]);
 
+      console.log('💬 User said:', messageText);
+
       // 🧠 STEP 1: Validate message
       const validation = isValidMessage(messageText);
       if (!validation.valid) {
@@ -228,37 +230,31 @@ const Chat = () => {
         return;
       }
 
-      // 🧠 STEP 2: Check if off-topic
-      if (isOffTopic(messageText, conversationContext, conversationState)) {
-        setIsTyping(true);
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-        setIsTyping(false);
-
-        await supabase.from('messages').insert([{
-          conversation_id: conversation.id,
-          sender_type: 'bot',
-          content: getRedirectionMessage(conversationState),
-        }]);
-
-        setTimeout(() => refreshMessages(true), 500);
-        setIsSending(false);
-        return;
+      // 🧠 STEP 2: Detect app type
+      const detectedAppType = detectAppTypeAdvanced(messageText);
+      if (detectedAppType && !conversationContext.appType) {
+        console.log('🎯 Detected app type:', detectedAppType);
+        setConversationContext(prev => ({ ...prev, appType: detectedAppType.type }));
       }
 
-      // 🧠 STEP 3: Analyze intent
+      // 🧠 STEP 3: Extract entities (features, platforms, etc.)
+      const entities = extractEntities(messageText);
+      console.log('📦 Extracted entities:', entities);
+
+      // 🧠 STEP 4: Analyze intent
       const intent = analyzeIntent(messageText, conversationContext);
       console.log('🎯 Intent Analysis:', intent);
 
-      // 🧠 STEP 4: Update context
+      // 🧠 STEP 5: Update context
       const updatedContext = updateContext(conversationContext, messageText, intent);
       setConversationContext(updatedContext);
       console.log('📊 Updated Context:', updatedContext);
 
-      // 🧠 STEP 5: Score message
+      // 🧠 STEP 6: Score message
       const messageScore = scoreMessage(messageText, intent, updatedContext, messages);
       console.log('⭐ Message Score:', messageScore);
 
-      // 🧠 STEP 6: Update conversation state
+      // 🧠 STEP 7: Update conversation state
       const updatedState = updateConversationState(
         conversationState,
         messageScore,
@@ -267,7 +263,7 @@ const Chat = () => {
       setConversationState(updatedState);
       console.log('🔄 Updated State:', updatedState);
 
-      // 🧠 STEP 7: Calculate new completion percentage
+      // 🧠 STEP 8: Calculate new completion percentage
       const contextCompleteness = calculateConversationCompleteness(updatedContext);
       const newPercentage = Math.max(
         conversation.completion_percentage + messageScore.progressIncrement,
@@ -276,6 +272,8 @@ const Chat = () => {
       const finalPercentage = Math.min(newPercentage, 100);
 
       console.log(`📈 Progress: ${conversation.completion_percentage}% → ${finalPercentage}%`);
+      console.log(`📊 Context Completeness: ${contextCompleteness}%`);
+      console.log(`➕ Progress Increment: +${messageScore.progressIncrement}%`);
 
       // Update database
       await supabase
@@ -287,7 +285,7 @@ const Chat = () => {
         })
         .eq('id', conversation.id);
 
-      // 🧠 STEP 8: Generate smart response
+      // 🧠 STEP 9: Generate smart response
       if (finalPercentage < 100) {
         setIsTyping(true);
         await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -395,7 +393,9 @@ const Chat = () => {
             <div>
               <h1 className="text-lg font-bold text-white">Pro Builder AI</h1>
               <p className="text-xs text-neon-blue/80">
-                Stage: {conversationState.stage.replace('_', ' ')} • {conversationContext.appType || 'Discovering'}
+                {conversationContext.appType 
+                  ? `App Type: ${conversationContext.appType.replace('_', ' ')}`
+                  : 'Discovering your app...'}
               </p>
             </div>
           </div>
@@ -419,18 +419,6 @@ const Chat = () => {
             </Button>
           </div>
         </div>
-
-        {/* Intelligence Debug Panel (for testing - remove in production) */}
-        {process.env.NODE_ENV === 'development' && (
-          <div className="bg-neon-purple/5 border-b border-neon-purple/20 px-6 py-2 text-xs">
-            <div className="flex gap-4 text-neon-purple/80">
-              <span>Features: {conversationContext.mentionedFeatures.length}</span>
-              <span>Stage: {conversationState.stage}</span>
-              <span>Messages: {conversationState.messageCount}</span>
-              <span>Blockers: {conversationState.blockers.length}</span>
-            </div>
-          </div>
-        )}
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto px-6 py-6 space-y-4">
@@ -495,11 +483,17 @@ const Chat = () => {
               <div className="flex items-center justify-between text-sm">
                 <span className="text-neon-cyan font-medium flex items-center gap-2">
                   <Zap className="w-4 h-4" />
-                  {getStageGuidance(conversationState.stage)}
+                  App Description Progress
                 </span>
                 <span className="text-white font-bold">{conversation.completion_percentage}%</span>
               </div>
               <Progress value={conversation.completion_percentage} className="h-2" />
+              {conversationContext.mentionedFeatures.length > 0 && (
+                <p className="text-xs text-neon-blue/60">
+                  Features detected: {conversationContext.mentionedFeatures.slice(0, 3).join(', ')}
+                  {conversationContext.mentionedFeatures.length > 3 && '...'}
+                </p>
+              )}
               {conversation.completion_percentage >= 100 && (
                 <Button
                   onClick={handleBuildNow}
