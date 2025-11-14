@@ -68,7 +68,6 @@ export const generateSmartQuestion = (
 
 // Extract feature mentions from message
 const extractFeatureMentions = (message: string): string[] => {
-  const lowerMsg = message.toLowerCase();
   const features: string[] = [];
   
   const featurePatterns = [
@@ -81,7 +80,7 @@ const extractFeatureMentions = (message: string): string[] => {
     { pattern: /\b(profile|account|dashboard)\b/i, feature: 'user_profile' },
     { pattern: /\b(like|comment|share|follow)\b/i, feature: 'social_interactions' },
     { pattern: /\b(map|location|gps|geolocation)\b/i, feature: 'location' },
-    { pattern: /\b(calendar|schedule|reminder|booking)\b/i, feature: 'calendar' },
+    { pattern: /\b(calendar|schedule|reminder|booking)\b/i, feature: 'calendar' }
   ];
   
   for (const { pattern, feature } of featurePatterns) {
@@ -101,7 +100,7 @@ const extractCompetitorMention = (message: string): string | null => {
     'instagram', 'facebook', 'twitter', 'tiktok', 'snapchat', 'linkedin',
     'amazon', 'ebay', 'shopify', 'etsy', 'walmart', 'target',
     'uber', 'lyft', 'doordash', 'grubhub', 'airbnb',
-    'netflix', 'spotify', 'youtube', 'hulu', 'disney+',
+    'netflix', 'spotify', 'youtube', 'hulu',
     'whatsapp', 'telegram', 'discord', 'slack', 'zoom',
     'duolingo', 'coursera', 'udemy', 'skillshare',
     'tinder', 'bumble', 'hinge',
@@ -462,8 +461,8 @@ const generateStageBasedQuestion = (
     const questions = [
       'Any unique or special features that make your app stand out?',
       'Is there anything else important I should know about your app?',
-      'Do you have any specific requirements I haven\'t asked about yet?',
-      'What's the one thing that will make users love your app?'
+      'Do you have any specific requirements I have not asked about yet?',
+      'What is the one thing that will make users love your app?'
     ];
     return {
       question: getUnaskedQuestion(questions, previousQuestions) || questions[0],
@@ -487,71 +486,4 @@ const getUnaskedQuestion = (questions: string[], askedQuestions: string[]): stri
   const unasked = questions.filter(q => !askedQuestions.includes(q));
   if (unasked.length === 0) return null;
   return unasked[Math.floor(Math.random() * unasked.length)];
-};
-
-// Generate multiple question suggestions (for complex scenarios)
-export const generateQuestionSuggestions = (
-  context: ConversationContext,
-  state: ConversationState,
-  count: number = 3
-): GeneratedQuestion[] => {
-  const suggestions: GeneratedQuestion[] = [];
-  
-  // Add app type question if missing
-  if (!context.appType) {
-    suggestions.push({
-      question: 'What type of app are you building?',
-      category: 'app_type',
-      priority: 'high',
-      reasoning: 'Missing app type'
-    });
-  }
-  
-  // Add feature questions if < 3 features
-  if (context.mentionedFeatures.length < 3) {
-    suggestions.push({
-      question: 'What are the main features your app needs?',
-      category: 'features',
-      priority: 'high',
-      reasoning: 'Need more features'
-    });
-  }
-  
-  // Add design question if no design prefs
-  if (context.mentionedDesignPrefs.length === 0) {
-    suggestions.push({
-      question: 'What design style do you envision?',
-      category: 'design',
-      priority: 'medium',
-      reasoning: 'Missing design preferences'
-    });
-  }
-  
-  // Add problem statement question
-  if (!context.problemStatement) {
-    suggestions.push({
-      question: 'What problem does your app solve?',
-      category: 'problem',
-      priority: 'medium',
-      reasoning: 'Missing problem statement'
-    });
-  }
-  
-  // Add audience question
-  if (!context.targetAudience) {
-    suggestions.push({
-      question: 'Who is your target audience?',
-      category: 'audience',
-      priority: 'medium',
-      reasoning: 'Missing target audience'
-    });
-  }
-  
-  // Sort by priority and return top N
-  suggestions.sort((a, b) => {
-    const priorityOrder = { high: 0, medium: 1, low: 2 };
-    return priorityOrder[a.priority] - priorityOrder[b.priority];
-  });
-  
-  return suggestions.slice(0, count);
 };
