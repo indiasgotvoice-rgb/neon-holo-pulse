@@ -4,10 +4,30 @@ import { supabase, Message, Conversation } from '@/lib/supabase';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Progress } from '@/components/ui/progress';
-import { Send, FileDown, LogOut, RefreshCw } from 'lucide-react';
+import { Send, FileDown, LogOut, RefreshCw, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
-import { botPrompts, getSmartBotPrompt } from '@/data/botPrompts';
+
+// Import all intelligence systems
+import { detectAppTypeAdvanced, extractMentionedFeatures } from '@/data/appTypes';
+import { 
+  analyzeIntent, 
+  extractEntities, 
+  updateContext, 
+  ConversationContext,
+  calculateConversationCompleteness 
+} from '@/data/contextUnderstanding';
+import { scoreMessage, isValidMessage } from '@/data/scoringSystem';
+import {
+  determineConversationStage,
+  updateConversationState,
+  initializeConversationState,
+  ConversationState,
+  isOffTopic,
+  getRedirectionMessage,
+  getStageGuidance
+} from '@/data/conversationFlow';
+import { generateSmartQuestion } from '@/data/questionGenerator';
 
 const Chat = () => {
   const { user, signOut } = useAuth();
@@ -22,22 +42,31 @@ const Chat = () => {
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastMessageCountRef = useRef<number>(0);
 
+  // Intelligence system state
+  const [conversationContext, setConversationContext] = useState<ConversationContext>({
+    mentionedFeatures: [],
+    mentionedDesignPrefs: [],
+    mentionedPlatforms: [],
+    techStack: [],
+    currentFocus: 'initial'
+  });
+  const [conversationState, setConversationState] = useState<ConversationState>(
+    initializeConversationState()
+  );
+
   useEffect(() => {
     if (!user) {
       navigate('/auth');
       return;
     }
-
     initializeConversation();
   }, [user, navigate]);
 
-  // Auto-refresh polling (works on Android)
+  // Auto-refresh polling
   useEffect(() => {
     if (!conversation) return;
-
     console.log('🔄 Starting auto-refresh polling...');
     
-    // Poll every 2 seconds
     pollingIntervalRef.current = setInterval(async () => {
       await refreshMessages(true);
     }, 2000);
@@ -72,7 +101,6 @@ const Chat = () => {
 
       const newMessageCount = msgs?.length || 0;
       
-      // Only update if message count changed
       if (newMessageCount !== lastMessageCountRef.current) {
         console.log('✅ New messages detected:', newMessageCount - lastMessageCountRef.current);
         setMessages(msgs || []);
@@ -83,7 +111,6 @@ const Chat = () => {
         }
       }
 
-      // Also refresh conversation data
       const { data: conv, error: convError } = await supabase
         .from('conversations')
         .select('*')
@@ -149,92 +176,23 @@ const Chat = () => {
     await new Promise((resolve) => setTimeout(resolve, 3000));
     setIsTyping(false);
 
-    // GET WELCOME MESSAGE FROM PROMPTS FILE
-    const welcomePrompts = botPrompts.find(p => p.category === 'welcome');
-    const welcomeMsg = welcomePrompts?.questions[Math.floor(Math.random() * welcomePrompts.questions.length)] || "Hey! I'm your app builder 👋";
-
     await supabase.from('messages').insert([{
       conversation_id: conversationId,
       sender_type: 'bot',
-      content: welcomeMsg,
+      content: "Hey! I'm your Pro Builder AI 👋 Ready to turn your app idea into reality?",
     }]);
 
     setIsTyping(true);
     await new Promise((resolve) => setTimeout(resolve, 5000));
     setIsTyping(false);
 
-    // GET START MESSAGE FROM PROMPTS FILE
-    const startPrompts = botPrompts.find(p => p.category === 'start');
-    const startMsg = startPrompts?.questions[Math.floor(Math.random() * startPrompts.questions.length)] || "Tell me about the app you want to build";
-
     await supabase.from('messages').insert([{
       conversation_id: conversationId,
       sender_type: 'bot',
-      content: startMsg,
+      content: "Tell me about the app you want to build. What's the main idea?",
     }]);
 
     setShowWelcome(false);
-  };
-
-  const analyzeMessage = (message: string): { shouldUpdate: boolean; increment: number; shouldAskMore: boolean; isValid: boolean } => {
-    const trimmed = message.trim();
-    const wordCount = trimmed.split(/\s+/).length;
-    
-    // STRICT VALIDATION
-    // Too short (less than 3 words)
-    if (wordCount < 3) {
-      return { shouldUpdate: false, increment: 0, shouldAskMore: true, isValid: false };
-    }
-    
-    // Just numbers or gibberish
-    if (/^[0-9!@#$%^&*()_+=\-{}\[\]:;"'<>,.?\/\\|`~\s]+$/.test(trimmed)) {
-      return { shouldUpdate: false, increment: 0, shouldAskMore: true, isValid: false };
-    }
-    
-    // No vowels (keyboard mashing)
-    const hasVowels = /[aeiou]/i.test(trimmed);
-    if (!hasVowels && trimmed.length > 5) {
-      return { shouldUpdate: false, increment: 0, shouldAskMore: true, isValid: false };
-    }
-    
-    // Check for meaningful content
-    const hasMeaningfulWords = /\b(app|application|feature|user|button|screen|page|data|color|design|login|payment|notification|upload|chat|profile|search|filter|dashboard|want|need|should|can|will|game|social|shop|store|food|fitness|music|video|photo|learn|education|travel|dating|news|health|finance|work|business|money|sell|buy|create|make|build|help|show|display|manage|track|save|share|like|comment|post|message|follow|friend)\b/i.test(trimmed);
-    
-    if (!hasMeaningfulWords && wordCount < 5) {
-      return { shouldUpdate: false, increment: 0, shouldAskMore: true, isValid: false };
-    }
-    
-    // Check for single repeated word
-    const words = trimmed.toLowerCase().split(/\s+/);
-    if (words.length > 1 && words.every(w => w === words[0])) {
-      return { shouldUpdate: false, increment: 0, shouldAskMore: true, isValid: false };
-    }
-    
-    // SCORING SYSTEM (only if valid)
-    const hasDetails = /\b(app|application|feature|user|button|screen|page|data|color|design|login|payment|notification|upload|chat|profile|search|filter|dashboard)\b/i.test(trimmed);
-    const hasNumbers = /\d/.test(trimmed);
-    const hasPunctuation = /[.!?]/.test(trimmed);
-    const hasSpecificDetails = /\b(will|should|can|need|want|must|allow|enable|include|have|show|display|create|make|build)\b/i.test(trimmed);
-    const hasActionWords = /\b(create|make|build|develop|design|add|include|integrate|implement|allow|enable|support|provide|offer)\b/i.test(trimmed);
-    const hasDescriptiveWords = /\b(simple|complex|easy|difficult|fast|slow|beautiful|modern|clean|professional|user-friendly|interactive|responsive)\b/i.test(trimmed);
-
-    let score = 0;
-    if (wordCount > 5) score += 2;
-    if (wordCount > 10) score += 4;
-    if (wordCount > 25) score += 4;
-    if (wordCount > 50) score += 5;
-    if (hasDetails) score += 4;
-    if (hasNumbers) score += 1;
-    if (hasPunctuation) score += 1;
-    if (hasSpecificDetails) score += 3;
-    if (hasMeaningfulWords) score += 3;
-    if (hasActionWords) score += 2;
-    if (hasDescriptiveWords) score += 2;
-
-    const increment = Math.min(score, 15);
-    const shouldAskMore = conversation!.completion_percentage + increment < 100;
-
-    return { shouldUpdate: increment > 0, increment, shouldAskMore, isValid: true };
   };
 
   const sendMessage = async () => {
@@ -245,107 +203,130 @@ const Chat = () => {
     setInputMessage('');
 
     try {
-      await supabase.from('messages').insert([
-        {
-          conversation_id: conversation.id,
-          sender_type: 'user',
-          content: messageText,
-        },
-      ]);
+      // Insert user message
+      await supabase.from('messages').insert([{
+        conversation_id: conversation.id,
+        sender_type: 'user',
+        content: messageText,
+      }]);
 
-      const analysis = analyzeMessage(messageText);
-      console.log('📊 Message analysis:', analysis);
-
-      // If message is invalid/gibberish
-      if (!analysis.isValid) {
+      // 🧠 STEP 1: Validate message
+      const validation = isValidMessage(messageText);
+      if (!validation.valid) {
         setIsTyping(true);
         await new Promise((resolve) => setTimeout(resolve, 1500));
         setIsTyping(false);
 
-        const clarificationPrompts = botPrompts.find(p => p.category === 'clarification_needed');
-        const clarificationMsg = clarificationPrompts?.questions[Math.floor(Math.random() * clarificationPrompts.questions.length)] || "Please describe your app idea clearly.";
-        
-        await supabase.from('messages').insert([
-          {
-            conversation_id: conversation.id,
-            sender_type: 'bot',
-            content: clarificationMsg,
-          },
-        ]);
-        
+        await supabase.from('messages').insert([{
+          conversation_id: conversation.id,
+          sender_type: 'bot',
+          content: validation.reason || "Please provide a meaningful description of your app.",
+        }]);
+
         setTimeout(() => refreshMessages(true), 500);
         setIsSending(false);
-        return; // STOP HERE - don't update progress
+        return;
       }
 
-      if (analysis.shouldUpdate) {
-        const newPercentage = Math.min(conversation.completion_percentage + analysis.increment, 100);
-        const updatedDescription = conversation.app_description + ' ' + messageText;
-
-        console.log(`✅ Updating progress: ${conversation.completion_percentage}% → ${newPercentage}%`);
-
-        await supabase
-          .from('conversations')
-          .update({
-            completion_percentage: newPercentage,
-            app_description: updatedDescription,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', conversation.id);
-
-        if (analysis.shouldAskMore && newPercentage < 100) {
-          setIsTyping(true);
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-          setIsTyping(false);
-
-          // USE SMART PROMPT FROM FILE - NOT HARDCODED
-          const smartPrompt = getSmartBotPrompt(messageText, newPercentage, messages);
-
-          console.log('🤖 Sending smart bot prompt:', smartPrompt);
-          
-          await supabase.from('messages').insert([
-            {
-              conversation_id: conversation.id,
-              sender_type: 'bot',
-              content: smartPrompt,
-            },
-          ]);
-        } else if (newPercentage >= 100) {
-          setIsTyping(true);
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-          setIsTyping(false);
-
-          // GET COMPLETION MESSAGE FROM PROMPTS FILE
-          const completionPrompts = botPrompts.find(p => p.category === 'completion');
-          const completionMsg = completionPrompts?.questions[Math.floor(Math.random() * completionPrompts.questions.length)] || "Perfect! Click 'Build Now' to start!";
-          
-          await supabase.from('messages').insert([
-            {
-              conversation_id: conversation.id,
-              sender_type: 'bot',
-              content: completionMsg,
-            },
-          ]);
-        }
-      } else {
+      // 🧠 STEP 2: Check if off-topic
+      if (isOffTopic(messageText, conversationContext, conversationState)) {
         setIsTyping(true);
         await new Promise((resolve) => setTimeout(resolve, 1500));
         setIsTyping(false);
 
-        // GET "NEED MORE DETAILS" MESSAGE FROM PROMPTS FILE
-        const needMorePrompts = botPrompts.find(p => p.category === 'need_more_details');
-        const needMoreMsg = needMorePrompts?.questions[Math.floor(Math.random() * needMorePrompts.questions.length)] || "Can you provide more details?";
-        
-        await supabase.from('messages').insert([
-          {
-            conversation_id: conversation.id,
-            sender_type: 'bot',
-            content: needMoreMsg,
-          },
-        ]);
+        await supabase.from('messages').insert([{
+          conversation_id: conversation.id,
+          sender_type: 'bot',
+          content: getRedirectionMessage(conversationState),
+        }]);
+
+        setTimeout(() => refreshMessages(true), 500);
+        setIsSending(false);
+        return;
       }
 
-      // Force immediate refresh after sending
+      // 🧠 STEP 3: Analyze intent
+      const intent = analyzeIntent(messageText, conversationContext);
+      console.log('🎯 Intent Analysis:', intent);
+
+      // 🧠 STEP 4: Update context
+      const updatedContext = updateContext(conversationContext, messageText, intent);
+      setConversationContext(updatedContext);
+      console.log('📊 Updated Context:', updatedContext);
+
+      // 🧠 STEP 5: Score message
+      const messageScore = scoreMessage(messageText, intent, updatedContext, messages);
+      console.log('⭐ Message Score:', messageScore);
+
+      // 🧠 STEP 6: Update conversation state
+      const updatedState = updateConversationState(
+        conversationState,
+        messageScore,
+        updatedContext
+      );
+      setConversationState(updatedState);
+      console.log('🔄 Updated State:', updatedState);
+
+      // 🧠 STEP 7: Calculate new completion percentage
+      const contextCompleteness = calculateConversationCompleteness(updatedContext);
+      const newPercentage = Math.max(
+        conversation.completion_percentage + messageScore.progressIncrement,
+        contextCompleteness
+      );
+      const finalPercentage = Math.min(newPercentage, 100);
+
+      console.log(`📈 Progress: ${conversation.completion_percentage}% → ${finalPercentage}%`);
+
+      // Update database
+      await supabase
+        .from('conversations')
+        .update({
+          completion_percentage: finalPercentage,
+          app_description: conversation.app_description + ' ' + messageText,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', conversation.id);
+
+      // 🧠 STEP 8: Generate smart response
+      if (finalPercentage < 100) {
+        setIsTyping(true);
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        setIsTyping(false);
+
+        const smartQuestion = generateSmartQuestion(
+          messageText,
+          updatedContext,
+          updatedState,
+          conversationState.questionsAsked
+        );
+
+        console.log('🤖 Smart Question:', smartQuestion);
+
+        await supabase.from('messages').insert([{
+          conversation_id: conversation.id,
+          sender_type: 'bot',
+          content: smartQuestion.question,
+        }]);
+
+        // Update state with asked question
+        setConversationState(prev => ({
+          ...prev,
+          questionsAsked: [...prev.questionsAsked, smartQuestion.question]
+        }));
+
+      } else {
+        // Completion reached
+        setIsTyping(true);
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        setIsTyping(false);
+
+        await supabase.from('messages').insert([{
+          conversation_id: conversation.id,
+          sender_type: 'bot',
+          content: "🎉 Perfect! I have everything I need. Your app description is complete! Click 'Build Now' to start building your dream app!",
+        }]);
+      }
+
       setTimeout(() => refreshMessages(true), 500);
     } catch (error) {
       console.error('Error sending message:', error);
@@ -371,13 +352,11 @@ const Chat = () => {
 
       toast.success('Your app is now being built!');
 
-      await supabase.from('messages').insert([
-        {
-          conversation_id: conversation.id,
-          sender_type: 'bot',
-          content: "Great! Your app is now being built. Our admin will start working on it and keep you updated!",
-        },
-      ]);
+      await supabase.from('messages').insert([{
+        conversation_id: conversation.id,
+        sender_type: 'bot',
+        content: "🚀 Awesome! Your app is now in the build queue. Our admin will start working on it and keep you updated with progress!",
+      }]);
 
       setTimeout(() => refreshMessages(true), 500);
     } catch (error) {
@@ -407,14 +386,17 @@ const Chat = () => {
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-background-secondary">
       <div className="max-w-4xl mx-auto h-screen flex flex-col">
+        {/* Header */}
         <div className="bg-background/40 backdrop-blur-xl border-b border-neon-cyan/20 px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-neon-cyan to-neon-blue flex items-center justify-center font-bold text-sm animate-neon-pulse">
               PB
             </div>
             <div>
-              <h1 className="text-lg font-bold text-white">Pro Builder</h1>
-              <p className="text-xs text-neon-blue/80">ID: {user.unique_user_id}</p>
+              <h1 className="text-lg font-bold text-white">Pro Builder AI</h1>
+              <p className="text-xs text-neon-blue/80">
+                Stage: {conversationState.stage.replace('_', ' ')} • {conversationContext.appType || 'Discovering'}
+              </p>
             </div>
           </div>
           <div className="flex gap-2">
@@ -438,11 +420,24 @@ const Chat = () => {
           </div>
         </div>
 
+        {/* Intelligence Debug Panel (for testing - remove in production) */}
+        {process.env.NODE_ENV === 'development' && (
+          <div className="bg-neon-purple/5 border-b border-neon-purple/20 px-6 py-2 text-xs">
+            <div className="flex gap-4 text-neon-purple/80">
+              <span>Features: {conversationContext.mentionedFeatures.length}</span>
+              <span>Stage: {conversationState.stage}</span>
+              <span>Messages: {conversationState.messageCount}</span>
+              <span>Blockers: {conversationState.blockers.length}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Messages */}
         <div className="flex-1 overflow-y-auto px-6 py-6 space-y-4">
           {showWelcome && (
             <div className="text-center py-12 space-y-4 animate-pulse">
-              <div className="text-4xl">👋</div>
-              <p className="text-neon-cyan">Initializing your builder...</p>
+              <div className="text-4xl">🤖</div>
+              <p className="text-neon-cyan">Initializing Pro Builder AI...</p>
             </div>
           )}
 
@@ -493,19 +488,18 @@ const Chat = () => {
           <div ref={messagesEndRef} />
         </div>
 
+        {/* Progress & Input */}
         <div className="px-6 pb-6 space-y-4">
           {conversation.status === 'describing' && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-neon-cyan font-medium">App Description Progress</span>
+                <span className="text-neon-cyan font-medium flex items-center gap-2">
+                  <Zap className="w-4 h-4" />
+                  {getStageGuidance(conversationState.stage)}
+                </span>
                 <span className="text-white font-bold">{conversation.completion_percentage}%</span>
               </div>
               <Progress value={conversation.completion_percentage} className="h-2" />
-              {conversation.completion_percentage < 100 && (
-                <p className="text-xs text-muted-foreground text-center animate-pulse">
-                  Keep describing your app with more details to reach 100%
-                </p>
-              )}
               {conversation.completion_percentage >= 100 && (
                 <Button
                   onClick={handleBuildNow}
